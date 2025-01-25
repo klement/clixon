@@ -907,6 +907,12 @@ xp_function_substring_str(xp_ctx            *xc,
     return retval;
 }
 
+static int32_t
+myround(double d)
+{
+    return (int32_t)(d < 0 ? (d - 0.5) : (d + 0.5));
+}
+
 /*! Eval xpath function return substring
  *
  * @param[in]  xc   Incoming context
@@ -965,7 +971,7 @@ xp_function_substring(xp_ctx            *xc,
         goto done;
     if (ctx2number(xr1, &d1) < 0)
         goto done;
-    if ((i10 = round(d1)-1) < 0)
+    if ((i10 = myround(d1)-1) < 0)
         i1 = 0;
     else
         i1 = i10;
@@ -984,7 +990,7 @@ xp_function_substring(xp_ctx            *xc,
             goto done;
         if (ctx2number(xr2, &d2) < 0)
             goto done;
-        if ((i2 = round(d2)) < 0)
+        if ((i2 = myround(d2)) < 0)
             i2 = 0;
         it = i10+i2;
         if (it < (int)strlen(s0)){
