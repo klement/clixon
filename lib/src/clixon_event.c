@@ -403,10 +403,15 @@ clixon_event_poll(int fd)
 int
 clixon_event_loop(clixon_handle h)
 {
-    struct      event_data *e = NULL;
-    struct      pollfd fds[MAX_EVENTS];
-    int         retval = -1;
-    int         nfds = 0;
+    int                retval = -1;
+    struct event_data *e = NULL;
+    struct pollfd      fds[MAX_EVENTS];
+    int                nfds = 0;
+    struct timeval     t0;
+    struct timeval     t;
+    int                timeout;
+    int                i;
+    int                n;
 
     while (clixon_exit_get() != 1) {
         nfds = 0;
@@ -417,55 +422,71 @@ clixon_event_loop(clixon_handle h)
                 nfds++;
             }
         }
-
-        int timeout = -1;
+        timeout = -1;
         if (ee_timers != NULL) {
-            struct timeval t0, t;
             gettimeofday(&t0, NULL);
             timersub(&ee_timers->e_time, &t0, &t);
             timeout = t.tv_sec * 1000 + t.tv_usec / 1000;
         }
-
-        int n = poll(fds, nfds, timeout);
-
+        n = poll(fds, nfds, timeout);
         if (n == -1) {
-            if (errno == EINTR) {
+            if (errno == EINTR)
                 continue;
-            }
             clixon_err(OE_EVENTS, errno, "poll");
             goto err;
         }
-
-        if (n == 0) {
-            // Таймаут
+        if (n == 0) { /* timeout */
             e = ee_timers;
             ee_timers = ee_timers->e_next;
+            clixon_debug(CLIXON_DBG_EVENT | CLIXON_DBG_DETAIL, "timeout: %s", e->e_string);
             if ((*e->e_fn)(0, e->e_arg) < 0) {
                 free(e);
                 goto err;
             }
             free(e);
-            continue;
         }
-
-        for (int i = 0; i < nfds; i++) {
+        if (clicon_option_bool(h, "CLICON_SOCK_PRIO")){
+            for (i = 0; i < nfds; i++) {
+                if (fds[i].revents & POLLIN) {
+                    for (e = ee; e; e = e->e_next) {
+                        if (e->e_type == EVENT_FD && e->e_fd == fds[i].fd && ee->e_prio) {
+                            clixon_debug(CLIXON_DBG_EVENT|CLIXON_DBG_DETAIL, "fd prio %s prio:%d", e->e_string, e->e_prio);
+                            if ((*e->e_fn)(e->e_fd, e->e_arg) < 0) {
+                                clixon_debug(CLIXON_DBG_EVENT, "Error in: %s", e->e_string);
+                                goto err;
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        for (i = 0; i < nfds; i++) {
             if (fds[i].revents & POLLIN) {
                 for (e = ee; e; e = e->e_next) {
-                    if (e->e_type == EVENT_FD && e->e_fd == fds[i].fd) {
+                    if (e->e_type == EVENT_FD && e->e_fd == fds[i].fd && ee->e_prio) {
+                        clixon_debug(CLIXON_DBG_EVENT|CLIXON_DBG_DETAIL, "fd %s prio:%d", e->e_string, e->e_prio);
                         if ((*e->e_fn)(e->e_fd, e->e_arg) < 0) {
+                            clixon_debug(CLIXON_DBG_EVENT, "Error in: %s", e->e_string);
                             goto err;
                         }
                         break;
                     }
                 }
+                if (clicon_option_bool(h, "CLICON_SOCK_PRIO"))
+                    break;
             }
         }
-    }
-
-    retval = 0;
-
+        clixon_exit_decr(); /* If exit is set and > 1, decrement it (and exit when 1) */
+        continue;
     err:
-        return retval;
+        clixon_debug(CLIXON_DBG_EVENT, "err");
+        break;
+    }
+    if (clixon_exit_get() == 1)
+        retval = 0;
+    clixon_debug(CLIXON_DBG_EVENT, "retval:%d", retval);
+    return retval;
 }
 #else
 int
