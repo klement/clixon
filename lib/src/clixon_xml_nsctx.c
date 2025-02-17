@@ -219,7 +219,7 @@ xml_nsctx_add(cvec  *cvv,
 
 static int
 xml_nsctx_node1(cxobj *xn,
-                cvec   *nsc)
+                cvec  *nsc)
 {
     int    retval = -1;
     cxobj *xa = NULL;

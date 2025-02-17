@@ -18,6 +18,9 @@
 /* Location for apps to find default config file */
 #undef CLIXON_DEFAULT_CONFIG
 
+/* Enable event polling feature */
+#undef CLIXON_EVENT_POLL
+
 /* Enable publish of notification streams using SSE and curl */
 #undef CLIXON_PUBLISH_STREAMS
 
@@ -74,9 +77,6 @@
 
 /* Define to 1 if you have the `fcgi' library (-lfcgi). */
 #undef HAVE_LIBFCGI
-
-/* Define to 1 if you have the `m' library (-lm). */
-#undef HAVE_LIBM
 
 /* Define to 1 if you have the `netsnmp' library (-lnetsnmp). */
 #undef HAVE_LIBNETSNMP
@@ -152,6 +152,9 @@
 
 /* Define to 1 if you have the `versionsort' function. */
 #undef HAVE_VERSIONSORT
+
+/* Maximum number of events */
+#undef MAX_EVENTS
 
 /* Define to the address where bug reports for this package should be sent. */
 #undef PACKAGE_BUGREPORT

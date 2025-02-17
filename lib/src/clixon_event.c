@@ -445,6 +445,7 @@ clixon_event_loop(clixon_handle h)
             }
             free(e);
         }
+        // XXX: double for loops not god for scaling
         if (clicon_option_bool(h, "CLICON_SOCK_PRIO")){
             for (i = 0; i < nfds; i++) {
                 if (fds[i].revents & POLLIN) {
@@ -464,17 +465,16 @@ clixon_event_loop(clixon_handle h)
         for (i = 0; i < nfds; i++) {
             if (fds[i].revents & POLLIN) {
                 for (e = ee; e; e = e->e_next) {
-                    if (e->e_type == EVENT_FD && e->e_fd == fds[i].fd && ee->e_prio) {
+                    if (e->e_type == EVENT_FD && e->e_fd == fds[i].fd && ee->e_prio == 0) {
                         clixon_debug(CLIXON_DBG_EVENT|CLIXON_DBG_DETAIL, "fd %s prio:%d", e->e_string, e->e_prio);
                         if ((*e->e_fn)(e->e_fd, e->e_arg) < 0) {
                             clixon_debug(CLIXON_DBG_EVENT, "Error in: %s", e->e_string);
                             goto err;
                         }
-                        break;
+                        if (clicon_option_bool(h, "CLICON_SOCK_PRIO"))
+                            break;
                     }
                 }
-                if (clicon_option_bool(h, "CLICON_SOCK_PRIO"))
-                    break;
             }
         }
         clixon_exit_decr(); /* If exit is set and > 1, decrement it (and exit when 1) */
