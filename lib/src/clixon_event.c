@@ -1,7 +1,7 @@
 /*
  *
   ***** BEGIN LICENSE BLOCK *****
- 
+
   Copyright (C) 2009-2016 Olof Hagsand and Benny Holmgren
   Copyright (C) 2017-2019 Olof Hagsand
   Copyright (C) 2020-2022 Olof Hagsand and Rubicon Communications, LLC(Netgat)e
@@ -25,7 +25,7 @@
   in which case the provisions of the GPL are applicable instead
   of those above. If you wish to allow use of your version of this file only
   under the terms of the GPL, and not to allow others to
-  use your version of this file under the terms of Apache License version 2, 
+  use your version of this file under the terms of Apache License version 2,
   indicate your decision by deleting the provisions above and replace them with
   the  notice and other provisions required by the GPL. If you do not delete
   the provisions above, a recipient may use your version of this file under
@@ -49,6 +49,7 @@
 #include <errno.h>
 #include <string.h>
 #include <signal.h>
+#include <poll.h>
 #include <syslog.h>
 #include <sys/param.h>
 #include <sys/types.h>
@@ -68,10 +69,6 @@
 #include "clixon_proc.h"
 #include "clixon_options.h"
 #include "clixon_event.h"
-
-#ifdef CLIXON_EVENT_POLL
-#include <poll.h>
-#endif
 
 /*
  * Constants
@@ -111,10 +108,12 @@ static int _clicon_sig_child = 0;
 /* If set (eg by signal handler) ignore EINTR and continue select loop */
 static int _clicon_sig_ignore = 0;
 
+static int _event_poll = 0;
+
 /*! For signal handlers: instead of doing exit, set a global variable to exit
  *
- * - zero means dont exit, 
- * - one means exit, 
+ * - zero means dont exit,
+ * - one means exit,
  * - more than one means decrement and make another event loop
  * Status is checked in event_loop and decremented by one.
  * When it reaches one the exit is made.
@@ -136,7 +135,7 @@ clixon_exit_get(void)
     return _clicon_exit;
 }
 
-/*! If > 1 decrement exit counter 
+/*! If > 1 decrement exit counter
  */
 static int
 clixon_exit_decr(void)
@@ -172,6 +171,13 @@ clicon_sig_ignore_get(void)
     return _clicon_sig_ignore;
 }
 
+int
+clicon_event_poll_set(int val)
+{
+    _event_poll = val;
+    return 0;
+}
+
 /*! Register a callback function to be called on input on a file descriptor.
  *
  * @param[in]  fd   File descriptor
@@ -183,7 +189,7 @@ clicon_sig_ignore_get(void)
  * int fn(int fd, void *arg){
  * }
  * clixon_event_reg_fd(fd, fn, (void*)42, "call fn on input on fd");
- * @endcode 
+ * @endcode
  * @see clixon_event_unreg_fd
  */
 int
@@ -268,9 +274,9 @@ clixon_event_unreg_fd(int   s,
  *   t1.tv_sec = 1; t1.tv_usec = 0;
  *   timeradd(&t, &t1, &t);
  *   clixon_event_reg_timeout(t, fn, NULL, "call every second");
- * } 
- * @endcode 
- * 
+ * }
+ * @endcode
+ *
  * @note  The timestamp is an absolute timestamp, not relative.
  * @note  The callback is not periodic, you need to make a new registration for each period, see example.
  * @note  The first argument to fn is a dummy, just to get the same signature as for file-descriptor callbacks.
@@ -278,7 +284,7 @@ clixon_event_unreg_fd(int   s,
  * @see clixon_event_unreg_timeout
  */
 int
-clixon_event_reg_timeout(struct timeval t, 
+clixon_event_reg_timeout(struct timeval t,
                          int          (*fn)(int, void*),
                          void          *arg,
                          char          *str)
@@ -357,26 +363,22 @@ clixon_event_unreg_timeout(int (*fn)(int, void*),
  * @retval     0    Nothing to read/empty fd
  * @retval    -1    Error
  */
-#ifdef CLIXON_EVENT_POLL
-int
-clixon_event_poll(int fd) {
+static int
+clixon_event_poll_poll(int fd)
+{
     struct pollfd 	pfd;
     int 			retval;
 
     pfd.fd = fd;
     pfd.events = POLLIN;
-
     retval = poll(&pfd, 1, 0);
-
-    if (retval < 0) {
+    if (retval < 0)
         clixon_err(OE_EVENTS, errno, "poll");
-    }
-
     return retval;
 }
-#else
-int
-clixon_event_poll(int fd)
+
+static int
+clixon_event_poll_select(int fd)
 {
     int            retval = -1;
     fd_set         fdset;
@@ -388,37 +390,105 @@ clixon_event_poll(int fd)
         clixon_err(OE_EVENTS, errno, "select");
     return retval;
 }
-#endif
+
+int
+clixon_event_poll(int fd)
+{
+    if (_event_poll)
+        return clixon_event_poll_poll(fd);
+    else
+        return clixon_event_poll_select(fd);
+}
+
+/*! Handle signal interrupt
+ *
+ * Signals are in three classes:
+ * (1) Signals that exit gracefully, the function returns 0
+ *     Must be registered such as by set_signal() of SIGTERM,SIGINT, etc with a handler that calls
+ *     clicon_exit_set().
+ * (2) SIGCHILD Childs that exit(), go through clixon_proc list and cal waitpid
+ *     New select loop is called
+ * (2) Signals are ignored, and the select is rerun, ie handler calls clicon_sig_ignore_get
+ *     New select loop is called
+ * (3) Other signals result in an error and return -1.
+ */
+static int
+clixon_event_eintr(clixon_handle h)
+{
+    int retval = -1;
+
+    clixon_debug(CLIXON_DBG_EVENT, "poll/select %s", strerror(errno));
+    if (clixon_exit_get() == 1){
+        clixon_err(OE_EVENTS, errno, "poll/select");
+        goto exit;
+    }
+    else if (clicon_sig_child_get()){
+        /* Go through processes and wait for child processes */
+        if (clixon_process_waitpid(h) < 0)
+            goto done;
+        clicon_sig_child_set(0);
+    }
+    else if (clicon_sig_ignore_get()){
+        clicon_sig_ignore_set(0);
+    }
+    else{
+        clixon_err(OE_EVENTS, errno, "poll/select");
+        goto done;
+    }
+    retval = 1; // OK
+ done: // Error
+    return retval;
+ exit:
+    retval = 0;
+    goto done;
+}
 
 /*! Dispatch file descriptor events (and timeouts) by invoking callbacks.
  *
  * @param[in] h  Clixon handle
  * @retval    0  OK
- * @retval   -1  Error: eg select, callback, timer, 
+ * @retval   -1  Error: eg select, callback, timer,
  * @note There is an issue with fairness between timeouts and events
  *       Currently a socket that is not read/emptied properly starve timeouts.
  *       One could try to poll the file descriptors after a timeout?
  */
-#ifdef CLIXON_EVENT_POLL
-int
-clixon_event_loop(clixon_handle h)
+static int
+clixon_event_loop_poll(clixon_handle h)
 {
     int                retval = -1;
     struct event_data *e = NULL;
-    struct pollfd      fds[MAX_EVENTS];
+    struct pollfd     *fds = NULL;
+    uint32_t           nfds_max = 0;
     int                nfds = 0;
     struct timeval     t0;
     struct timeval     t;
+    int64_t            tdiff;
     int                timeout;
     int                i;
     int                n;
+    int                ret;
 
     while (clixon_exit_get() != 1) {
+        nfds = 0;
+        // nfds could be pre-computed */
+        for (e = ee; e; e = e->e_next) {
+            if (e->e_type == EVENT_FD)
+                nfds++;
+        }
+        if (nfds > nfds_max){
+            nfds_max = nfds;
+            if ((fds = realloc(fds, nfds_max*sizeof(struct pollfd))) == NULL){
+                clixon_err(OE_UNIX, errno, "realloc");
+                goto done;
+            }
+        }
         nfds = 0;
         for (e = ee; e; e = e->e_next) {
             if (e->e_type == EVENT_FD) {
                 fds[nfds].fd = e->e_fd;
                 fds[nfds].events = POLLIN;
+                clixon_debug(CLIXON_DBG_EVENT | CLIXON_DBG_DETAIL, "%d register %s\n",
+                             nfds, e->e_string);
                 nfds++;
             }
         }
@@ -426,14 +496,33 @@ clixon_event_loop(clixon_handle h)
         if (ee_timers != NULL) {
             gettimeofday(&t0, NULL);
             timersub(&ee_timers->e_time, &t0, &t);
-            timeout = t.tv_sec * 1000 + t.tv_usec / 1000;
+            tdiff = t.tv_sec * 1000 + t.tv_usec / 1000;
+            if (tdiff < 0)
+                timeout = 0;
+            else
+                timeout = (int)tdiff;
         }
+        clixon_debug(CLIXON_DBG_EVENT | CLIXON_DBG_DETAIL, "nfds:%d timeout:%d ms\n",
+                     nfds, timeout);
         n = poll(fds, nfds, timeout);
+        clixon_debug(CLIXON_DBG_EVENT | CLIXON_DBG_DETAIL, "after n:%d\n", n);
         if (n == -1) {
-            if (errno == EINTR)
+            if (errno == EINTR){
+                if (clixon_exit_get() == 1){
+                    clixon_err(OE_EVENTS, errno, "poll");
+                    goto ok;
+                }
+                if ((ret = clixon_event_eintr(h)) < 0)
+                    goto done;
+                if (ret == 0){ // exit
+                    retval = 0;
+                    goto done;
+                }
                 continue;
-            clixon_err(OE_EVENTS, errno, "poll");
-            goto err;
+            }
+            else
+                clixon_err(OE_EVENTS, errno, "poll");
+            goto done;
         }
         if (n == 0) { /* timeout */
             e = ee_timers;
@@ -441,56 +530,40 @@ clixon_event_loop(clixon_handle h)
             clixon_debug(CLIXON_DBG_EVENT | CLIXON_DBG_DETAIL, "timeout: %s", e->e_string);
             if ((*e->e_fn)(0, e->e_arg) < 0) {
                 free(e);
-                goto err;
+                goto done;
             }
             free(e);
         }
-        // XXX: double for loops not god for scaling
-        if (clicon_option_bool(h, "CLICON_SOCK_PRIO")){
-            for (i = 0; i < nfds; i++) {
-                if (fds[i].revents & POLLIN) {
-                    for (e = ee; e; e = e->e_next) {
-                        if (e->e_type == EVENT_FD && e->e_fd == fds[i].fd && ee->e_prio) {
-                            clixon_debug(CLIXON_DBG_EVENT|CLIXON_DBG_DETAIL, "fd prio %s prio:%d", e->e_string, e->e_prio);
-                            if ((*e->e_fn)(e->e_fd, e->e_arg) < 0) {
-                                clixon_debug(CLIXON_DBG_EVENT, "Error in: %s", e->e_string);
-                                goto err;
-                            }
-                            break;
-                        }
-                    }
-                }
-            }
-        }
+        // XXX double for loops
         for (i = 0; i < nfds; i++) {
             if (fds[i].revents & POLLIN) {
                 for (e = ee; e; e = e->e_next) {
-                    if (e->e_type == EVENT_FD && e->e_fd == fds[i].fd && ee->e_prio == 0) {
-                        clixon_debug(CLIXON_DBG_EVENT|CLIXON_DBG_DETAIL, "fd %s prio:%d", e->e_string, e->e_prio);
+                    if (e->e_type == EVENT_FD && e->e_fd == fds[i].fd) {
+                        clixon_debug(CLIXON_DBG_EVENT, "fd %s", e->e_string);
                         if ((*e->e_fn)(e->e_fd, e->e_arg) < 0) {
                             clixon_debug(CLIXON_DBG_EVENT, "Error in: %s", e->e_string);
-                            goto err;
+                            goto done;
                         }
-                        if (clicon_option_bool(h, "CLICON_SOCK_PRIO"))
-                            break;
+                        break;
                     }
                 }
             }
         }
         clixon_exit_decr(); /* If exit is set and > 1, decrement it (and exit when 1) */
         continue;
-    err:
-        clixon_debug(CLIXON_DBG_EVENT, "err");
-        break;
     }
+ ok:
     if (clixon_exit_get() == 1)
         retval = 0;
+ done:
     clixon_debug(CLIXON_DBG_EVENT, "retval:%d", retval);
+    if (fds)
+        free(fds);
     return retval;
 }
-#else
-int
-clixon_event_loop(clixon_handle h)
+
+static int
+clixon_event_loop_select(clixon_handle h)
 {
     struct event_data *e;
     int                n;
@@ -500,6 +573,7 @@ clixon_event_loop(clixon_handle h)
     fd_set             fdset;
     int                retval = -1;
     struct event_data *e_next;
+    int                ret;
 
     while (clixon_exit_get() != 1){
         FD_ZERO(&fdset);
@@ -527,34 +601,18 @@ clixon_event_loop(clixon_handle h)
         }
         if (n == -1) {
             if (errno == EINTR){
-                /* Signals are checked and are in three classes:
-                 * (1) Signals that exit gracefully, the function returns 0
-                 *     Must be registered such as by set_signal() of SIGTERM,SIGINT, etc with a handler that calls
-                 *     clicon_exit_set().
-                 * (2) SIGCHILD Childs that exit(), go through clixon_proc list and cal waitpid
-                 *     New select loop is called
-                 * (2) Signals are ignored, and the select is rerun, ie handler calls clicon_sig_ignore_get
-                 *     New select loop is called
-                 * (3) Other signals result in an error and return -1.
-                 */
-                clixon_debug(CLIXON_DBG_EVENT, "select: %s", strerror(errno));
                 if (clixon_exit_get() == 1){
                     clixon_err(OE_EVENTS, errno, "select");
                     retval = 0;
+                    goto err;
                 }
-                else if (clicon_sig_child_get()){
-                    /* Go through processes and wait for child processes */
-                    if (clixon_process_waitpid(h) < 0)
-                        goto err;
-                    clicon_sig_child_set(0);
-                    continue;
+                if ((ret = clixon_event_eintr(h)) < 0)
+                    goto err;
+                if (ret == 0){ // exit
+                    retval = 0;
+                    goto err;
                 }
-                else if (clicon_sig_ignore_get()){
-                    clicon_sig_ignore_set(0);
-                    continue;
-                }
-                else
-                    clixon_err(OE_EVENTS, errno, "select");
+                continue;
             }
             else
                 clixon_err(OE_EVENTS, errno, "select");
@@ -621,7 +679,15 @@ clixon_event_loop(clixon_handle h)
     clixon_debug(CLIXON_DBG_EVENT, "retval:%d", retval);
     return retval;
 }
-#endif
+
+int
+clixon_event_loop(clixon_handle h)
+{
+    if (_event_poll)
+        return clixon_event_loop_poll(h);
+    else
+        return clixon_event_loop_select(h);
+}
 
 int
 clixon_event_exit(void)

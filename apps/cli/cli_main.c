@@ -960,7 +960,7 @@ main(int    argc,
         if (rest_commands(h, restarg) < 0)
             goto done;
     }
-
+    clicon_event_poll_set(1); // XXX
     /* Go into event-loop unless -1 command-line */
     if (!once){
         retval = cli_interactive(h);

@@ -777,8 +777,6 @@ with_yang_standard_dir
 with_clicon_user
 with_clicon_group
 enable_nls
-enable_event_poll
-with_max_events
 '
       ac_precious_vars='build_alias
 host_alias
@@ -1425,7 +1423,6 @@ Optional Features:
                           http/1 only
   --enable-netsnmp        Enable net-snmp Clixon YANG mapping
 
-  --enable-event-poll     Enable event polling feature
 
 Optional Packages:
   --with-PACKAGE[=ARG]    use PACKAGE [ARG=yes]
@@ -1454,7 +1451,6 @@ Optional Packages:
   --with-clicon-user=user Run as this user in configuration files
   --with-clicon-group=group
                           Run as this group in configuration files
-  --with-max-events=VALUE Set the maximum number of events (default: 1024)
 
 Some influential environment variables:
   CC          C compiler command
@@ -6250,33 +6246,6 @@ fi
 
 
 test "x$prefix" = xNONE && prefix=$ac_default_prefix
-
-# Check whether --enable-event-poll was given.
-if test ${enable_event_poll+y}
-then :
-  enableval=$enable_event_poll; if test "$enable_event_poll" = "yes"; then
-
-printf "%s\n" "#define CLIXON_EVENT_POLL 1" >>confdefs.h
-
-     fi
-
-fi
-
-
-
-# Check whether --with-max-events was given.
-if test ${with_max_events+y}
-then :
-  withval=$with_max_events; MAX_EVENTS=$withval
-else $as_nop
-  MAX_EVENTS=1024  # Default value if not specified
-
-fi
-
-
-
-printf "%s\n" "#define MAX_EVENTS $MAX_EVENTS" >>confdefs.h
-
 
 ac_config_files="$ac_config_files Makefile lib/Makefile lib/src/Makefile lib/clixon/Makefile apps/Makefile apps/cli/Makefile apps/backend/Makefile apps/netconf/Makefile apps/restconf/Makefile apps/snmp/Makefile include/Makefile etc/Makefile etc/clixonrc example/Makefile example/main/Makefile example/main/example.xml docker/Makefile docker/clixon-dev/Makefile docker/example/Makefile docker/test/Makefile yang/Makefile yang/clixon/Makefile yang/mandatory/Makefile doc/Makefile test/Makefile test/config.sh test/cicd/Makefile test/vagrant/Makefile"
 

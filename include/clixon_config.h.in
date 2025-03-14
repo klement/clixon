@@ -18,9 +18,6 @@
 /* Location for apps to find default config file */
 #undef CLIXON_DEFAULT_CONFIG
 
-/* Enable event polling feature */
-#undef CLIXON_EVENT_POLL
-
 /* Enable publish of notification streams using SSE and curl */
 #undef CLIXON_PUBLISH_STREAMS
 
@@ -152,9 +149,6 @@
 
 /* Define to 1 if you have the `versionsort' function. */
 #undef HAVE_VERSIONSORT
-
-/* Maximum number of events */
-#undef MAX_EVENTS
 
 /* Define to the address where bug reports for this package should be sent. */
 #undef PACKAGE_BUGREPORT

@@ -454,7 +454,7 @@ netconf_input_cb(int   s,
         frame_size = 0;
     else
         frame_size = i32;
-    /* Read input data from socket and append to cbbuf */
+    /* Read input data from socket and append to cbuf */
     if ((len = netconf_input_read2(s, buf, buflen, &eof)) < 0)
         goto done;
     p = buf;
@@ -938,6 +938,7 @@ main(int    argc,
      * used by the client, even though new TCP sessions are created for
      * each message sent to the backend.
      */
+    clicon_event_poll_set(1); // XXX
     if (clicon_hello_req(h, "cl:netconf", NULL, &id) < 0)
         goto done;
     clicon_session_id_set(h, id);

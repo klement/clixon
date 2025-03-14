@@ -1123,6 +1123,7 @@ main(int    argc,
     if (netconf_monitoring_statistics_init(h) < 0)
         goto done;
     clixon_log(h, LOG_NOTICE, "%s: %u Started", __PROGRAM__, getpid());
+    clicon_event_poll_set(1); // XXX
     if (clixon_event_loop(h) < 0)
         goto done;
  ok:

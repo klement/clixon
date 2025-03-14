@@ -1400,7 +1400,7 @@ main(int    argc,
      * @see clicon_hello_req
      */
     clicon_data_set(h, "session-transport", "cl:restconf");
-
+    clicon_event_poll_set(1); // XXX
     /* Main event loop */
     if (clixon_event_loop(h) < 0)
         goto done;
