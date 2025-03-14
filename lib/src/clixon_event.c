@@ -108,7 +108,7 @@ static int _clicon_sig_child = 0;
 /* If set (eg by signal handler) ignore EINTR and continue select loop */
 static int _clicon_sig_ignore = 0;
 
-static int _event_poll = 0;
+static int _event_poll = 1;
 
 /*! For signal handlers: instead of doing exit, set a global variable to exit
  *
@@ -174,7 +174,7 @@ clicon_sig_ignore_get(void)
 int
 clicon_event_poll_set(int val)
 {
-    _event_poll = val;
+    //    _event_poll = val;
     return 0;
 }
 
@@ -486,8 +486,8 @@ clixon_event_loop_poll(clixon_handle h)
         for (e = ee; e; e = e->e_next) {
             if (e->e_type == EVENT_FD) {
                 fds[nfds].fd = e->e_fd;
-                fds[nfds].events = POLLIN;
-                clixon_debug(CLIXON_DBG_EVENT | CLIXON_DBG_DETAIL, "%d register %s\n",
+                fds[nfds].events = POLLIN; /* requested event */
+                clixon_debug(CLIXON_DBG_EVENT | CLIXON_DBG_DETAIL, "%d register %s",
                              nfds, e->e_string);
                 nfds++;
             }
@@ -502,11 +502,9 @@ clixon_event_loop_poll(clixon_handle h)
             else
                 timeout = (int)tdiff;
         }
-        clixon_debug(CLIXON_DBG_EVENT | CLIXON_DBG_DETAIL, "nfds:%d timeout:%d ms\n",
-                     nfds, timeout);
         n = poll(fds, nfds, timeout);
-        clixon_debug(CLIXON_DBG_EVENT | CLIXON_DBG_DETAIL, "after n:%d\n", n);
         if (n == -1) {
+            clixon_debug(CLIXON_DBG_EVENT | CLIXON_DBG_DETAIL, "n=-1 Error");
             if (errno == EINTR){
                 if (clixon_exit_get() == 1){
                     clixon_err(OE_EVENTS, errno, "poll");
@@ -525,6 +523,7 @@ clixon_event_loop_poll(clixon_handle h)
             goto done;
         }
         if (n == 0) { /* timeout */
+            clixon_debug(CLIXON_DBG_EVENT | CLIXON_DBG_DETAIL, "n=0 Timeout");
             e = ee_timers;
             ee_timers = ee_timers->e_next;
             clixon_debug(CLIXON_DBG_EVENT | CLIXON_DBG_DETAIL, "timeout: %s", e->e_string);
@@ -536,21 +535,36 @@ clixon_event_loop_poll(clixon_handle h)
         }
         // XXX double for loops
         for (i = 0; i < nfds; i++) {
-            if (fds[i].revents & POLLIN) {
-                for (e = ee; e; e = e->e_next) {
-                    if (e->e_type == EVENT_FD && e->e_fd == fds[i].fd) {
-                        clixon_debug(CLIXON_DBG_EVENT, "fd %s", e->e_string);
-                        if ((*e->e_fn)(e->e_fd, e->e_arg) < 0) {
-                            clixon_debug(CLIXON_DBG_EVENT, "Error in: %s", e->e_string);
-                            goto done;
+            if (fds[i].revents != 0) { /* returned events */
+                if (fds[i].revents & POLLIN ||
+                    fds[i].revents & POLLHUP) {
+                    clixon_debug(CLIXON_DBG_EVENT | CLIXON_DBG_DETAIL, "n>0 fd:%d POLLIN", i);
+                    for (e = ee; e; e = e->e_next) {
+                        if (e->e_type == EVENT_FD && e->e_fd == fds[i].fd) {
+                            clixon_debug(CLIXON_DBG_EVENT, "fd %s", e->e_string);
+                            _ee_unreg = 0;
+                            if ((*e->e_fn)(e->e_fd, e->e_arg) < 0) {
+                                clixon_debug(CLIXON_DBG_EVENT, "Error in: %s", e->e_string);
+                                goto done;
+                            }
+                            if (_ee_unreg){ /* and this socket,... */
+                                _ee_unreg = 0;
+                                break;
+                            }
                         }
-                        break;
                     }
                 }
+                else if (fds[i].revents & POLLNVAL) { /* fd not open */
+                    clixon_err(OE_EVENTS, 0, "poll: Invalid request: fd %d not open", fds[i].fd);
+                    goto done;
+                }
+                else {
+                    clixon_debug(CLIXON_DBG_EVENT | CLIXON_DBG_DETAIL, "fd:%d revents:0x%x", i, fds[i].revents);
+                    goto done;
+                }
             }
+            clixon_exit_decr(); /* If exit is set and > 1, decrement it (and exit when 1) */
         }
-        clixon_exit_decr(); /* If exit is set and > 1, decrement it (and exit when 1) */
-        continue;
     }
  ok:
     if (clixon_exit_get() == 1)
